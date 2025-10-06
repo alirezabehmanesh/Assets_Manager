@@ -44,7 +44,6 @@ def update_airtable_prices_only(api_data):
 
     for sym, info in api_data.items():
         if sym in symbol_to_record:
-            # آپدیت Price و Timestamp فقط
             table.update(symbol_to_record[sym]['id'], {
                 "Price": info["price"],
                 "Timestamp": now
@@ -110,9 +109,7 @@ st.table(df_price)
 df = get_table_df()
 df.set_index("Symbol", inplace=True)
 
-# ======================
 # mapping Symbol -> record_id برای آپدیت خودکار
-# ======================
 symbol_to_id = {r['fields'].get("Symbol"): r['id'] for r in table.all()}
 
 # ======================
@@ -120,12 +117,14 @@ symbol_to_id = {r['fields'].get("Symbol"): r['id'] for r in table.all()}
 # ======================
 st.subheader("💼 ورود دارایی")
 with st.expander("✏️ ورود مقادیر دارایی"):
+    # دارایی‌های API
     for sym in df.index:
+        if sym == "naghd":
+            continue  # موجودی نقد جداگانه اضافه می‌شود
         key_name = f"assets_{sym}"
         if key_name not in st.session_state:
             st.session_state[key_name] = int(df.at[sym,'Assets'])
         
-        # فقط خواندن مقدار از session_state
         assets_input = st.number_input(
             f"{df.at[sym,'Name']}:",
             min_value=0,
@@ -133,10 +132,20 @@ with st.expander("✏️ ورود مقادیر دارایی"):
             key=key_name
         )
         
-        # آپدیت Airtable فقط
         record_id = symbol_to_id.get(sym)
         if record_id is not None:
             save_asset(record_id, assets_input, int(df.at[sym,'Price']))
+
+    # موجودی نقد با Symbol naghd
+    if "cash_assets" not in st.session_state:
+        st.session_state["cash_assets"] = 0
+
+    cash_input = st.number_input(
+        "💵 موجودی نقد:",
+        min_value=0,
+        value=st.session_state["cash_assets"],
+        key="cash_assets"
+    )
 
 # ======================
 # نمایش Total Assets Prices
@@ -147,13 +156,29 @@ df.set_index("Symbol", inplace=True)
 st.subheader("💵 ارزش دارایی‌ها")
 total_rows = []
 for sym in df.index:
+    if sym == "naghd":
+        continue
     total = int(df.at[sym,'Assets']) * int(df.at[sym,'Price'])
     total_rows.append({
+        "Symbol": sym,
         "نام": df.at[sym,'Name'],
         "قیمت": format_number(df.at[sym,'Price']),
         "دارایی": df.at[sym,'Assets'],
         "مجموع": format_number(total)
     })
+
+# ردیف موجودی نقد
+cash_symbol = "naghd"
+cash_price = 1000000
+cash_assets = st.session_state.get("cash_assets", 0)
+cash_total = cash_assets * cash_price
+total_rows.append({
+    "Symbol": cash_symbol,
+    "نام": "موجودی نقد",
+    "قیمت": format_number(cash_price),
+    "دارایی": cash_assets,
+    "مجموع": format_number(cash_total)
+})
 
 df_total = pd.DataFrame(total_rows)
 st.table(df_total)
