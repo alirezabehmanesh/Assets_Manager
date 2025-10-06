@@ -37,6 +37,7 @@ def fetch_api_data():
     return data
 
 def update_airtable(api_data):
+    # حذف رکوردهای قبلی API
     all_records = table.all()
     for rec in all_records:
         if rec['fields'].get("Timestamp"):
@@ -68,15 +69,12 @@ def get_table_df():
     df = pd.DataFrame(rows)
     return df
 
-def save_assets_bulk(df, assets_dict):
-    for sym, assets in assets_dict.items():
-        record_id = df.at[sym,'id']
-        price = int(df.at[sym,'Price'])
-        total = str(assets * price)
-        table.update(record_id, {
-            "Assets": str(assets),
-            "Total Assets Prices": total
-        })
+def save_asset(record_id, assets, price):
+    total = str(int(assets) * int(price))
+    table.update(record_id, {
+        "Assets": str(assets),
+        "Total Assets Prices": total
+    })
 
 # ======================
 # Streamlit UI
@@ -105,26 +103,32 @@ df = get_table_df()
 df.set_index("Symbol", inplace=True)
 
 # ======================
-# بخش ورود دارایی با یک دکمه ثبت
+# بخش ورود دارایی با ذخیره خودکار
 # ======================
 st.subheader("💼 ورود دارایی")
-assets_inputs = {}
 with st.expander("✏️ ورود مقادیر دارایی"):
     for sym in df.index:
-        assets_inputs[sym] = st.number_input(f"{df.at[sym,'Name']}:", min_value=0, value=int(df.at[sym,'Assets']))
-    
-    if st.button("💾 ثبت مقادیر"):
-        save_assets_bulk(df, assets_inputs)
-        st.success("مقادیر با موفقیت ثبت شدند!")
-        st.experimental_rerun()
+        key_name = f"assets_{sym}"
+        if key_name not in st.session_state:
+            st.session_state[key_name] = int(df.at[sym,'Assets'])
+        assets_input = st.number_input(
+            f"{df.at[sym,'Name']}:",
+            min_value=0,
+            value=st.session_state[key_name],
+            key=key_name
+        )
+        # ذخیره خودکار در Airtable اگر مقدار تغییر کرد
+        if assets_input != st.session_state[key_name]:
+            save_asset(df.at[sym,'id'], assets_input, int(df.at[sym,'Price']))
+            st.session_state[key_name] = assets_input
 
 # ======================
 # نمایش Total Assets Prices
 # ======================
-st.subheader("💵 ارزش دارایی‌ها")
 df = get_table_df()
 df.set_index("Symbol", inplace=True)
 
+st.subheader("💵 ارزش دارایی‌ها")
 total_rows = []
 for sym in df.index:
     total = int(df.at[sym,'Assets']) * int(df.at[sym,'Price'])
