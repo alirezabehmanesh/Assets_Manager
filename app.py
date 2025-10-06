@@ -36,24 +36,6 @@ def fetch_api_data():
         data[sym] = {"name": golds[sym]["name"], "price": str(golds[sym]["price"])}
     return data
 
-def ensure_cash_record():
-    """اطمینان از وجود رکورد موجودی نقد در Airtable"""
-    records = table.all()
-    for r in records:
-        if r['fields'].get("Symbol") == "naghd":
-            return r['id']  # رکورد موجود است
-    # اگر موجود نیست، ایجاد کن
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    rec = table.create({
-        "Timestamp": now,
-        "Symbol": "naghd",
-        "Name": "موجودی نقد",
-        "Price": "1000000",
-        "Assets": "0",
-        "Total Assets Prices": "0"
-    })
-    return rec['id']
-
 def update_airtable_prices_only(api_data):
     """ آپدیت قیمت‌ها و timestamp رکوردهای موجود بدون پاک کردن ستون Assets """
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -62,6 +44,7 @@ def update_airtable_prices_only(api_data):
 
     for sym, info in api_data.items():
         if sym in symbol_to_record:
+            # آپدیت Price و Timestamp فقط
             table.update(symbol_to_record[sym]['id'], {
                 "Price": info["price"],
                 "Timestamp": now
@@ -114,16 +97,10 @@ api_data = fetch_api_data()
 update_airtable_prices_only(api_data)
 
 # ======================
-# اطمینان از وجود رکورد موجودی نقد
-# ======================
-cash_record_id = ensure_cash_record()
-
-# ======================
 # نمایش قیمت لحظه‌ای
 # ======================
 st.subheader("📈 قیمت لحظه‌ای")
 price_data = {v['name']: format_number(v['price']) for v in api_data.values()}
-price_data["موجودی نقد"] = format_number(1000000)
 df_price = pd.DataFrame(list(price_data.items()), columns=["نماد", "قیمت"])
 st.table(df_price)
 
@@ -133,7 +110,9 @@ st.table(df_price)
 df = get_table_df()
 df.set_index("Symbol", inplace=True)
 
+# ======================
 # mapping Symbol -> record_id برای آپدیت خودکار
+# ======================
 symbol_to_id = {r['fields'].get("Symbol"): r['id'] for r in table.all()}
 
 # ======================
@@ -146,6 +125,7 @@ with st.expander("✏️ ورود مقادیر دارایی"):
         if key_name not in st.session_state:
             st.session_state[key_name] = int(df.at[sym,'Assets'])
         
+        # فقط خواندن مقدار از session_state
         assets_input = st.number_input(
             f"{df.at[sym,'Name']}:",
             min_value=0,
@@ -153,10 +133,10 @@ with st.expander("✏️ ورود مقادیر دارایی"):
             key=key_name
         )
         
+        # آپدیت Airtable فقط
         record_id = symbol_to_id.get(sym)
         if record_id is not None:
-            price = int(df.at[sym,'Price'])
-            save_asset(record_id, assets_input, price)
+            save_asset(record_id, assets_input, int(df.at[sym,'Price']))
 
 # ======================
 # نمایش Total Assets Prices
@@ -169,7 +149,6 @@ total_rows = []
 for sym in df.index:
     total = int(df.at[sym,'Assets']) * int(df.at[sym,'Price'])
     total_rows.append({
-        "Symbol": sym,
         "نام": df.at[sym,'Name'],
         "قیمت": format_number(df.at[sym,'Price']),
         "دارایی": df.at[sym,'Assets'],
