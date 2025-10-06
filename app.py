@@ -36,21 +36,29 @@ def fetch_api_data():
         data[sym] = {"name": golds[sym]["name"], "price": str(golds[sym]["price"])}
     return data
 
-def update_airtable(api_data):
-    # حذف رکوردهای قبلی API
-    all_records = table.all()
-    for rec in all_records:
-        if rec['fields'].get("Timestamp"):
-            table.delete(rec['id'])
-    
+def update_airtable_prices_only(api_data):
+    """ آپدیت قیمت‌ها و timestamp رکوردهای موجود بدون پاک کردن ستون Assets """
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    records = table.all()
+    symbol_to_record = {r['fields'].get("Symbol"): r for r in records}
+
     for sym, info in api_data.items():
-        table.create({
-            "Timestamp": now,
-            "Symbol": sym,
-            "Name": info["name"],
-            "Price": info["price"]
-        })
+        if sym in symbol_to_record:
+            # آپدیت Price و Timestamp فقط
+            table.update(symbol_to_record[sym]['id'], {
+                "Price": info["price"],
+                "Timestamp": now
+            })
+        else:
+            # رکورد جدید بساز اگر وجود ندارد
+            table.create({
+                "Timestamp": now,
+                "Symbol": sym,
+                "Name": info["name"],
+                "Price": info["price"],
+                "Assets": "0",
+                "Total Assets Prices": "0"
+            })
 
 def get_table_df():
     records = table.all()
@@ -86,7 +94,7 @@ st.title("💰 قیمت لحظه‌ای و دارایی‌ها")
 # Fetch & update API
 # ======================
 api_data = fetch_api_data()
-update_airtable(api_data)
+update_airtable_prices_only(api_data)
 
 # ======================
 # نمایش قیمت لحظه‌ای
@@ -108,17 +116,16 @@ df.set_index("Symbol", inplace=True)
 symbol_to_id = {r['fields'].get("Symbol"): r['id'] for r in table.all()}
 
 # ======================
-# بخش ورود دارایی با ذخیره خودکار (بدون تغییر session_state بعد از input)
+# بخش ورود دارایی با ذخیره خودکار
 # ======================
 st.subheader("💼 ورود دارایی")
 with st.expander("✏️ ورود مقادیر دارایی"):
     for sym in df.index:
         key_name = f"assets_{sym}"
-        # مقدار اولیه فقط اگر وجود نداشته باشد
         if key_name not in st.session_state:
             st.session_state[key_name] = int(df.at[sym,'Assets'])
         
-        # فقط خواندن مقدار از session_state، تغییر آن بعد از input حذف شد
+        # فقط خواندن مقدار از session_state
         assets_input = st.number_input(
             f"{df.at[sym,'Name']}:",
             min_value=0,
