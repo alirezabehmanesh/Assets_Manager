@@ -108,30 +108,28 @@ df.set_index("Symbol", inplace=True)
 symbol_to_id = {r['fields'].get("Symbol"): r['id'] for r in table.all()}
 
 # ======================
-# بخش ورود دارایی با ذخیره خودکار
+# بخش ورود دارایی با ذخیره خودکار (بدون تغییر session_state بعد از input)
 # ======================
 st.subheader("💼 ورود دارایی")
 with st.expander("✏️ ورود مقادیر دارایی"):
-    assets_inputs = {}
     for sym in df.index:
         key_name = f"assets_{sym}"
+        # مقدار اولیه فقط اگر وجود نداشته باشد
         if key_name not in st.session_state:
             st.session_state[key_name] = int(df.at[sym,'Assets'])
-        assets_inputs[sym] = st.number_input(
+        
+        # فقط خواندن مقدار از session_state، تغییر آن بعد از input حذف شد
+        assets_input = st.number_input(
             f"{df.at[sym,'Name']}:",
             min_value=0,
             value=st.session_state[key_name],
             key=key_name
         )
-
-# ======================
-# آپدیت Airtable بعد از حلقه input
-# ======================
-for sym, assets_val in assets_inputs.items():
-    record_id = symbol_to_id.get(sym)
-    if record_id is not None:
-        save_asset(record_id, assets_val, int(df.at[sym,'Price']))
-        st.session_state[f"assets_{sym}"] = assets_val
+        
+        # آپدیت Airtable فقط
+        record_id = symbol_to_id.get(sym)
+        if record_id is not None:
+            save_asset(record_id, assets_input, int(df.at[sym,'Price']))
 
 # ======================
 # نمایش Total Assets Prices
