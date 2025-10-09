@@ -1,7 +1,6 @@
 import streamlit as st
 import requests
-from playwright.sync_api import sync_playwright
-import time
+from lxml import html
 
 st.set_page_config(page_title="مدیریت دارایی", layout="wide")
 
@@ -35,18 +34,17 @@ def format_thousands(num):
 # --- گرفتن Priceها از Bonbast ---
 def fetch_prices():
     prices = {}
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto("https://www.bonbast.com/")
-        time.sleep(2)
-        for symbol, xpath in XPATHS.items():
-            try:
-                el = page.locator(f"xpath={xpath}")
-                prices[symbol] = el.inner_text().strip().replace(",", "")
-            except:
+    resp = requests.get("https://www.bonbast.com/")
+    tree = html.fromstring(resp.content)
+    for symbol, xpath in XPATHS.items():
+        try:
+            el = tree.xpath(xpath)
+            if el:
+                prices[symbol] = el[0].text.strip().replace(",", "")
+            else:
                 prices[symbol] = None
-        browser.close()
+        except:
+            prices[symbol] = None
     prices["cash"] = "0"
     return prices
 
