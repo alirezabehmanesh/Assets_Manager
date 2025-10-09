@@ -1,121 +1,121 @@
-import streamlit as st
 import requests
 from lxml import html
+import streamlit as st
 
-st.set_page_config(page_title="مدیریت دارایی", layout="wide")
-
-# --- Baserow ---
+# --- تنظیمات Baserow ---
 BASEROW_TOKEN = "dc2jtvdYze2paMsbTsTwPQhXNKQ7awQa"
-BASE_URL = "https://api.baserow.io/api/database/rows/table/698482/"
-HEADERS = {"Authorization": f"Token {BASEROW_TOKEN}"}
-
-PRICE_FIELD = "field_5832628"
-ASSETS_FIELD = "field_5832629"
-TOTAL_FIELD = "field_5832630"
-
-# --- Bonbast XPaths ---
-XPATHS = {
-    "eur": "/html/body/div[2]/div[2]/div[1]/div[2]/div[1]/table/tbody/tr[3]/td[3]",
-    "usd": "/html/body/div[2]/div[2]/div[1]/div[2]/div[1]/table/tbody/tr[2]/td[3]",
-    "gold18k": "/html/body/div[2]/div[2]/div[1]/div[4]/div[1]/div/div/span",
-    "coinemami": "/html/body/div[2]/div[2]/div[1]/div[3]/div[2]/table/tbody/tr[3]/td[2]",
-    "coinhalf": "/html/body/div[2]/div[2]/div[1]/div[3]/div[2]/table/tbody/tr[4]/td[2]",
-    "coinquarter": "/html/body/div[2]/div[2]/div[1]/div[3]/div[2]/table/tbody/tr[5]/td[2]",
-    "coin1g": "/html/body/div[2]/div[2]/div[1]/div[3]/div[2]/table/tbody/tr[6]/td[2]",
+TABLE_ID = 698482
+FIELDS = {
+    "Name": "field_5832624",
+    "Symbol": "field_5832627",
+    "Price": "field_5832628",
+    "Assets": "field_5832629",
+    "TotalAssetsPrices": "field_5832630",
 }
 
-# --- تابع فرمت هزارگان ---
-def format_thousands(num):
-    try:
-        return "{:,}".format(int(num)).replace(",", ".")
-    except:
-        return num
+HEADERS = {"Authorization": f"Token {BASEROW_TOKEN}"}
 
-# --- گرفتن Priceها از Bonbast ---
+# --- XPaths سایت Bonbast ---
+XPATHS = {
+    "eur": "/html/body/div[2]/div[2]/div[1]/div[2]/div[1]/table/tbody/tr[3]/td[3]/text()",
+    "usd": "/html/body/div[2]/div[2]/div[1]/div[2]/div[1]/table/tbody/tr[2]/td[3]/text()",
+    "gold18k": "/html/body/div[2]/div[2]/div[1]/div[4]/div[1]/div/div/span/text()",
+    "coinemami": "/html/body/div[2]/div[2]/div[1]/div[3]/div[2]/table/tbody/tr[3]/td[2]/text()",
+    "coinhalf": "/html/body/div[2]/div[2]/div[1]/div[3]/div[2]/table/tbody/tr[4]/td[2]/text()",
+    "coinquarter": "/html/body/div[2]/div[2]/div[1]/div[3]/div[2]/table/tbody/tr[5]/td[2]/text()",
+    "coin1g": "/html/body/div[2]/div[2]/div[1]/div[3]/div[2]/table/tbody/tr[6]/td[2]/text()",
+}
+
+# --- استخراج قیمت‌ها ---
 def fetch_prices():
+    url = "https://www.bonbast.com/"
+    r = requests.get(url)
+    tree = html.fromstring(r.content)
     prices = {}
-    resp = requests.get("https://www.bonbast.com/")
-    tree = html.fromstring(resp.content)
     for symbol, xpath in XPATHS.items():
         try:
-            el = tree.xpath(xpath)
-            if el:
-                prices[symbol] = el[0].text.strip().replace(",", "")
-            else:
-                prices[symbol] = None
-        except:
-            prices[symbol] = None
-    prices["cash"] = "0"
+            text = tree.xpath(xpath)[0].replace(",", "").strip()
+            prices[symbol] = int(text)
+        except Exception as e:
+            st.warning(f"خطا در خواندن {symbol}: {e}")
+            prices[symbol] = 0
     return prices
 
-# --- آپدیت Priceها در Baserow ---
-def update_prices(prices):
-    resp = requests.get(BASE_URL + "?user_field_names=true", headers=HEADERS)
-    rows = resp.json().get("results", [])
-    for row in rows:
-        symbol = row.get("Symbol")
-        row_id = row.get("id")
-        if row_id and symbol in prices:
-            data = {PRICE_FIELD: prices[symbol]}
-            requests.patch(BASE_URL + f"{row_id}/", headers=HEADERS, json=data)
-
-# --- گرفتن ردیف‌ها ---
+# --- دریافت ردیف‌ها ---
 def get_rows():
-    resp = requests.get(BASE_URL + "?user_field_names=true", headers=HEADERS)
-    return resp.json().get("results", [])
+    url = f"https://api.baserow.io/api/database/rows/table/{TABLE_ID}/?user_field_names=true"
+    r = requests.get(url, headers=HEADERS).json()
+    return r["results"]
 
-# --- آپدیت Assets و Total ---
-def update_assets(symbol, value):
-    rows = get_rows()
-    for row in rows:
-        if row["Symbol"] == symbol:
-            price = row.get("Price", "0").replace(".", "")
-            try:
-                total = int(price) * int(value)
-            except:
-                total = 0
-            data = {ASSETS_FIELD: str(value), TOTAL_FIELD: str(total)}
-            requests.patch(BASE_URL + f"{row['id']}/", headers=HEADERS, json=data)
-            break
+# --- آپدیت Price ---
+def update_price(row_id, value):
+    url = f"https://api.baserow.io/api/database/rows/table/{TABLE_ID}/{row_id}/"
+    data = {FIELDS["Price"]: str(value)}
+    r = requests.patch(url, headers=HEADERS, json=data)
+    return r.json()
 
-# --- اجرای اولیه ---
+# --- آپدیت Assets و TotalAssetsPrices ---
+def update_assets(row_id, assets_value, price_value):
+    total = assets_value * price_value
+    data = {
+        FIELDS["Assets"]: str(assets_value),
+        FIELDS["TotalAssetsPrices"]: str(total)
+    }
+    url = f"https://api.baserow.io/api/database/rows/table/{TABLE_ID}/{row_id}/"
+    requests.patch(url, headers=HEADERS, json=data)
+
+# --- قالب‌بندی هزارگان ---
+def fmt(n):
+    return f"{n:,}".replace(",", ".")
+
+# --- اجرای استخراج قیمت و آپدیت Price ---
 prices = fetch_prices()
-update_prices(prices)
 rows = get_rows()
+row_map = {row["Symbol"]: row for row in rows}
 
-# --- بخش 1: قیمت های لحظه ای ---
-st.header("💰 قیمت‌های لحظه‌ای")
+for symbol, price in prices.items():
+    if symbol in row_map:
+        update_price(row_map[symbol]["id"], price)
+
+# --- Streamlit ---
+st.title("مدیریت دارایی و قیمت‌ها")
+
+# --- بخش 1: قیمت‌های لحظه‌ای ---
+st.header("قیمت‌های لحظه‌ای")
 price_table = []
 for row in rows:
     if row["Symbol"] == "cash":
         continue
-    price_table.append({
-        "نام نماد": row["Name"],
-        "قیمت": format_thousands(row.get("Price", "0"))
-    })
+    symbol = row["Symbol"]
+    name = row["Name"]
+    price = prices.get(symbol, 0)
+    price_table.append({"نام": name, "قیمت": fmt(price)})
 st.table(price_table)
 
-# --- بخش 2: ورود دارایی ها ---
-with st.expander("📥 ورود دارایی‌ها", expanded=False):
+# --- بخش 2: ورود دارایی‌ها ---
+st.header("ورود دارایی‌ها")
+with st.expander("ورود دارایی‌ها", expanded=False):
     for row in rows:
-        name = row["Name"]
         symbol = row["Symbol"]
-        value = st.text_input(f"{name}:", row.get("Assets", ""), key=f"asset_{symbol}")
+        name = row["Name"]
+        current_assets = row.get("Assets", "")
+        value = st.text_input(f"{name}:", current_assets, key=symbol)
         if value.isdigit():
-            update_assets(symbol, value)
+            update_assets(row["id"], int(value), prices.get(symbol, 0))
 
-# --- بخش 3: محاسبه دارایی ها ---
-st.header("📊 محاسبه دارایی‌ها")
-calc_table = []
+# --- بخش 3: محاسبه دارایی‌ها ---
+st.header("محاسبه دارایی‌ها")
+asset_table = []
 total_sum = 0
 for row in rows:
-    assets = int(row.get("Assets", "0") or 0)
-    total = int(row.get("Total Assets Prices", "0") or 0)
-    calc_table.append({
-        "نام نماد": row["Name"],
-        "تعداد دارایی": assets,
-        "مجموع دارایی": format_thousands(total)
-    })
+    name = row["Name"]
+    assets = int(row.get("Assets") or 0)
+    total = int(row.get("Total Assets Prices") or 0)
     total_sum += total
-st.table(calc_table)
-st.markdown(f"**جمع کل دارایی‌ها: {format_thousands(total_sum)}**")
+    asset_table.append({
+        "نام": name,
+        "تعداد دارایی": fmt(assets),
+        "مجموع دارایی": fmt(total)
+    })
+st.table(asset_table)
+st.write(f"**جمع کل دارایی‌ها: {fmt(total_sum)}**")
