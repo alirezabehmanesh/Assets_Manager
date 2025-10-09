@@ -13,7 +13,7 @@ API_URL = "https://brsapi.ir/Api/Market/Gold_Currency.php?key=BfDYYWKtijTbhNUkYA
 # ---------------------------------------------------------------------
 def fetch_api_data():
     try:
-        response = requests.get(API_URL, timeout=10)
+        response = requests.get(API_URL, timeout=30)
         response.raise_for_status()
         data = response.json()
         return data
@@ -113,3 +113,4 @@ if api_data:
         st.warning("هیچ داده‌ای برای نمایش وجود ندارد.")
 else:
     st.error("اتصال به API برقرار نشد.")
+
