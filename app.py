@@ -1,101 +1,99 @@
-# app.py
 import streamlit as st
-from playwright.sync_api import sync_playwright
 import requests
-import time
 
 # --- تنظیمات Baserow ---
 BASEROW_TOKEN = "dc2jtvdYze2paMsbTsTwPQhXNKQ7awQa"
 TABLE_ID = 698482
-FIELDS = {
-    "Name": "field_5832624",
-    "Symbol": "field_5832627",
-    "Price": "field_5832628",
-    "Assets": "field_5832629",
-    "Total Assets Prices": "field_5832630"
-}
+BASE_URL = "https://api.baserow.io/api/database/rows/table"
 
-# --- تابع گرفتن ردیف‌ها از Baserow ---
-def get_rows():
-    url = f"https://api.baserow.io/api/database/rows/table/{TABLE_ID}/?user_field_names=true"
-    headers = {"Authorization": f"Token {BASEROW_TOKEN}"}
-    res = requests.get(url, headers=headers).json()
-    return res["results"]
+HEADERS = {"Authorization": f"Token {BASEROW_TOKEN}"}
 
-# --- تابع آپدیت قیمت ---
-def update_price(row_id, price):
-    url = f"https://api.baserow.io/api/database/rows/table/{TABLE_ID}/{row_id}/"
-    headers = {"Authorization": f"Token {BASEROW_TOKEN}"}
-    data = {"Price": str(price)}
-    res = requests.patch(url, headers=headers, json=data)
-    return res.json()
+# --- تابع دریافت داده‌های Baserow ---
+def get_baserow_rows():
+    url = f"{BASE_URL}/{TABLE_ID}/?user_field_names=true"
+    resp = requests.get(url, headers=HEADERS)
+    resp.raise_for_status()
+    return resp.json()["results"]
 
-# --- گرفتن قیمت‌ها از Bonbast با Playwright ---
+# --- تابع آپدیت Price ---
+def update_price(symbol, price):
+    rows = get_baserow_rows()
+    row_id = next((r["id"] for r in rows if r["Symbol"] == symbol), None)
+    if row_id:
+        url = f"{BASE_URL}/{TABLE_ID}/{row_id}/"
+        data = {"Price": str(price)}
+        requests.patch(url, headers=HEADERS, json=data)
+
+# --- تابع آپدیت Assets و Total Assets Prices ---
+def update_assets(symbol, asset_value):
+    rows = get_baserow_rows()
+    row = next((r for r in rows if r["Symbol"] == symbol), None)
+    if row:
+        price = float(row.get("Price") or 0)
+        total = price * float(asset_value)
+        url = f"{BASE_URL}/{TABLE_ID}/{row['id']}/"
+        data = {"Assets": str(asset_value), "Total Assets Prices": str(total)}
+        requests.patch(url, headers=HEADERS, json=data)
+
+# --- دریافت قیمت‌ها از Bonbast ---
 def fetch_prices():
+    url = "https://www.bonbast.com/json"
+    payload = {}
+    headers = {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
+    resp = requests.post(url, json=payload, headers=headers)
+    resp.raise_for_status()
+    data = resp.json()
+    
     prices = {}
-    xpaths = {
-        "eur": '/html/body/div[2]/div[2]/div[1]/div[2]/div[1]/table/tbody/tr[3]/td[3]',
-        "usd": '/html/body/div[2]/div[2]/div[1]/div[2]/div[1]/table/tbody/tr[2]/td[3]',
-        "gold18k": '/html/body/div[2]/div[2]/div[1]/div[4]/div[1]/div/div/span',
-        "coinemami": '/html/body/div[2]/div[2]/div[1]/div[3]/div[2]/table/tbody/tr[3]/td[2]',
-        "coinhalf": '/html/body/div[2]/div[2]/div[1]/div[3]/div[2]/table/tbody/tr[4]/td[2]',
-        "coinquarter": '/html/body/div[2]/div[2]/div[1]/div[3]/div[2]/table/tbody/tr[5]/td[2]',
-        "coin1g": '/html/body/div[2]/div[2]/div[1]/div[3]/div[2]/table/tbody/tr[6]/td[2]'
-    }
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto("https://www.bonbast.com/", timeout=60000)
-        time.sleep(2)  # اجازه بده JS لود بشه
-
-        for symbol, xp in xpaths.items():
-            el = page.query_selector(f"xpath={xp}")
-            if el:
-                prices[symbol] = el.inner_text().replace(",", "").strip()
-            else:
-                st.error(f"خطا در خواندن {symbol}")
-        browser.close()
+    # استخراج قیمت‌ها از JSON بر اساس کلیدها
+    prices["eur"] = data["usd"]["euro"]  # مثال
+    prices["usd"] = data["usd"]["dollar"]
+    prices["gold18k"] = data["gold"]["gold18"]
+    prices["coinemami"] = data["coins"]["emami"]
+    prices["coinhalf"] = data["coins"]["half"]
+    prices["coinquarter"] = data["coins"]["quarter"]
+    prices["coin1g"] = data["coins"]["onegram"]
+    prices["cash"] = 0
     return prices
 
-# --- آپدیت ردیف‌ها در Baserow ---
-def update_baserow_prices(prices):
-    rows = get_rows()
-    for row in rows:
-        symbol = row["Symbol"]
-        if symbol in prices:
-            update_price(row["id"], prices[symbol])
-            st.success(f"{symbol} آپدیت شد به {prices[symbol]}")
-
-# --- Streamlit ---
-st.title("مدیریت دارایی و قیمت‌ها")
-
-st.header("قیمت‌های لحظه‌ای")
+# --- آپدیت قیمت‌ها در Baserow ---
 prices = fetch_prices()
-update_baserow_prices(prices)
+for symbol, price in prices.items():
+    update_price(symbol, price)
 
-rows = get_rows()
-for row in rows:
-    if row["Name"] != "موجودی نقد":
-        st.write(f"{row['Name']}: {int(float(row['Price'])):,}")
+# --- بخش 1: قیمت‌های لحظه‌ای ---
+st.header("💹 قیمت‌های لحظه‌ای")
+rows = get_baserow_rows()
+table_data = []
+for r in rows:
+    if r["Symbol"] != "cash":
+        name = r["Name"]
+        price = r.get("Price") or 0
+        price_fmt = f"{int(float(price)):,}".replace(",", ".")
+        table_data.append({"نام نماد": name, "قیمت": price_fmt})
+st.table(table_data)
 
-st.header("ورود دارایی‌ها (Click to show/hide)")
-with st.expander("نمایش/پنهان کردن دارایی‌ها"):
-    for row in rows:
-        value = st.text_input(f"{row['Name']}:", row.get("Assets", ""), key=row["Symbol"])
+# --- بخش 2: ورود دارایی‌ها ---
+st.header("📥 ورود دارایی‌ها")
+with st.expander("ورود دارایی‌ها", expanded=False):
+    for r in rows:
+        name = r["Name"]
+        symbol = r["Symbol"]
+        current_asset = r.get("Assets") or ""
+        value = st.text_input(f"{name}:", value=current_asset, key=symbol)
         if value.isdigit():
-            # آپدیت Assets و محاسبه Total Assets Prices
-            total = int(float(value)) * int(float(row.get("Price") or 0))
-            url = f"https://api.baserow.io/api/database/rows/table/{TABLE_ID}/{row['id']}/"
-            headers = {"Authorization": f"Token {BASEROW_TOKEN}"}
-            data = {"Assets": value, "Total Assets Prices": str(total)}
-            requests.patch(url, headers=headers, json=data)
+            update_assets(symbol, value)
 
-st.header("محاسبه دارایی‌ها")
-total_sum = 0
-for row in rows:
-    assets = int(float(row.get("Assets") or 0))
-    total_price = int(float(row.get("Total Assets Prices") or 0))
-    total_sum += total_price
-    st.write(f"{row['Name']}: تعداد={assets:,} مجموع={total_price:,}")
-st.write(f"جمع کل دارایی‌ها: {total_sum:,}")
+# --- بخش 3: محاسبه دارایی‌ها ---
+st.header("🧮 محاسبه دارایی‌ها")
+calc_data = []
+total_all = 0
+rows = get_baserow_rows()
+for r in rows:
+    name = r["Name"]
+    asset = float(r.get("Assets") or 0)
+    total = float(r.get("Total Assets Prices") or 0)
+    calc_data.append({"نام نماد": name, "تعداد دارایی": asset, "مجموع دارایی": total})
+    total_all += total
+st.table(calc_data)
+st.write(f"**جمع کل دارایی‌ها:** {int(total_all):,}".replace(",", "."))
