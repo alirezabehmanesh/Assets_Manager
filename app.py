@@ -4,96 +4,102 @@ import requests
 # --- تنظیمات Baserow ---
 BASEROW_TOKEN = "dc2jtvdYze2paMsbTsTwPQhXNKQ7awQa"
 TABLE_ID = 698482
-BASE_URL = "https://api.baserow.io/api/database/rows/table"
+API_BASE = "https://api.baserow.io/api/database/rows/table"
 
 HEADERS = {"Authorization": f"Token {BASEROW_TOKEN}"}
 
-# --- تابع دریافت داده‌های Baserow ---
-def get_baserow_rows():
-    url = f"{BASE_URL}/{TABLE_ID}/?user_field_names=true"
+# --- XPaths حذف شد، از JSON مستقیم استفاده می‌کنیم ---
+BONBAST_JSON_URL = "https://www.bonbast.com/json"
+
+# --- بخش 1: قیمت های لحظه ای ---
+def fetch_prices():
+    try:
+        resp = requests.post(BONBAST_JSON_URL)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        st.error(f"خطا در گرفتن قیمت‌ها: {e}")
+        return {}
+
+    # Map JSON keys to symbols
+    prices = {}
+    prices["eur"] = data.get("EUR", 0)
+    prices["usd"] = data.get("USD", 0)
+    prices["gold18k"] = data.get("Gold_18", 0)
+    prices["coinemami"] = data.get("Emami", 0)
+    prices["coinhalf"] = data.get("Half", 0)
+    prices["coinquarter"] = data.get("Quarter", 0)
+    prices["coin1g"] = data.get("One_gram", 0)
+    prices["cash"] = 0
+    return prices
+
+def get_rows():
+    url = f"{API_BASE}/{TABLE_ID}/?user_field_names=true"
     resp = requests.get(url, headers=HEADERS)
     resp.raise_for_status()
     return resp.json()["results"]
 
-# --- تابع آپدیت Price ---
-def update_price(symbol, price):
-    rows = get_baserow_rows()
-    row_id = next((r["id"] for r in rows if r["Symbol"] == symbol), None)
-    if row_id:
-        url = f"{BASE_URL}/{TABLE_ID}/{row_id}/"
-        data = {"Price": str(price)}
-        requests.patch(url, headers=HEADERS, json=data)
+def update_row(row_id, fields):
+    url = f"{API_BASE}/{TABLE_ID}/{row_id}/"
+    requests.patch(url, headers=HEADERS, json=fields)
 
-# --- تابع آپدیت Assets و Total Assets Prices ---
-def update_assets(symbol, asset_value):
-    rows = get_baserow_rows()
-    row = next((r for r in rows if r["Symbol"] == symbol), None)
-    if row:
-        price = float(row.get("Price") or 0)
-        total = price * float(asset_value)
-        url = f"{BASE_URL}/{TABLE_ID}/{row['id']}/"
-        data = {"Assets": str(asset_value), "Total Assets Prices": str(total)}
-        requests.patch(url, headers=HEADERS, json=data)
+def update_prices(prices):
+    rows = get_rows()
+    for row in rows:
+        symbol = row["Symbol"]
+        if symbol in prices:
+            update_row(row["id"], {"Price": str(prices[symbol])})
 
-# --- دریافت قیمت‌ها از Bonbast ---
-def fetch_prices():
-    url = "https://www.bonbast.com/json"
-    payload = {}
-    headers = {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
-    resp = requests.post(url, json=payload, headers=headers)
-    resp.raise_for_status()
-    data = resp.json()
-    
-    prices = {}
-    # استخراج قیمت‌ها از JSON بر اساس کلیدها
-    prices["eur"] = data["usd"]["euro"]  # مثال
-    prices["usd"] = data["usd"]["dollar"]
-    prices["gold18k"] = data["gold"]["gold18"]
-    prices["coinemami"] = data["coins"]["emami"]
-    prices["coinhalf"] = data["coins"]["half"]
-    prices["coinquarter"] = data["coins"]["quarter"]
-    prices["coin1g"] = data["coins"]["onegram"]
-    prices["cash"] = 0
-    return prices
+def update_assets(symbol, value):
+    rows = get_rows()
+    for row in rows:
+        if row["Symbol"] == symbol:
+            price = float(row.get("Price", 0))
+            assets_val = float(value)
+            update_row(row["id"], {
+                "Assets": value,
+                "Total Assets Prices": str(price * assets_val)
+            })
+            break
 
-# --- آپدیت قیمت‌ها در Baserow ---
+# --- آپدیت قیمت‌ها ---
 prices = fetch_prices()
-for symbol, price in prices.items():
-    update_price(symbol, price)
+if prices:
+    update_prices(prices)
 
-# --- بخش 1: قیمت‌های لحظه‌ای ---
-st.header("💹 قیمت‌های لحظه‌ای")
-rows = get_baserow_rows()
-table_data = []
-for r in rows:
-    if r["Symbol"] != "cash":
-        name = r["Name"]
-        price = r.get("Price") or 0
-        price_fmt = f"{int(float(price)):,}".replace(",", ".")
-        table_data.append({"نام نماد": name, "قیمت": price_fmt})
-st.table(table_data)
+rows = get_rows()
 
-# --- بخش 2: ورود دارایی‌ها ---
-st.header("📥 ورود دارایی‌ها")
-with st.expander("ورود دارایی‌ها", expanded=False):
-    for r in rows:
-        name = r["Name"]
-        symbol = r["Symbol"]
-        current_asset = r.get("Assets") or ""
-        value = st.text_input(f"{name}:", value=current_asset, key=symbol)
-        if value.isdigit():
+st.title("📊 مدیریت دارایی‌ها")
+
+# --- بخش 1 ---
+st.header("قیمت های لحظه ای")
+price_table = []
+for row in rows:
+    if row["Symbol"] != "cash":
+        price = float(row.get("Price", 0))
+        price_table.append([row["Name"], f"{price:,.0f}"])
+st.table(price_table)
+
+# --- بخش 2 ---
+st.header("ورود دارایی‌ها")
+with st.expander("ثبت دارایی‌ها"):
+    for row in rows:
+        name = row["Name"]
+        symbol = row["Symbol"]
+        val = row.get("Assets", "")
+        value = st.text_input(f"{name}:", val, key=f"asset_{symbol}")
+        if value and value.replace(".","").isdigit():
             update_assets(symbol, value)
 
-# --- بخش 3: محاسبه دارایی‌ها ---
-st.header("🧮 محاسبه دارایی‌ها")
-calc_data = []
-total_all = 0
-rows = get_baserow_rows()
-for r in rows:
-    name = r["Name"]
-    asset = float(r.get("Assets") or 0)
-    total = float(r.get("Total Assets Prices") or 0)
-    calc_data.append({"نام نماد": name, "تعداد دارایی": asset, "مجموع دارایی": total})
-    total_all += total
-st.table(calc_data)
-st.write(f"**جمع کل دارایی‌ها:** {int(total_all):,}".replace(",", "."))
+# --- بخش 3 ---
+st.header("محاسبه دارایی ها")
+asset_table = []
+total_sum = 0
+for row in rows:
+    name = row["Name"]
+    assets = float(row.get("Assets") or 0)
+    total = float(row.get("Total Assets Prices") or 0)
+    asset_table.append([name, f"{assets:,.0f}", f"{total:,.0f}"])
+    total_sum += total
+st.table(asset_table)
+st.write(f"**جمع کل دارایی‌ها:** {total_sum:,.0f}")
