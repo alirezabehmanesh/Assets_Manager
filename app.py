@@ -1,104 +1,112 @@
 import streamlit as st
 import requests
-import json
 
-# --- تنظیمات Baserow ---
-BASEROW_TOKEN = "dc2jtvdYze2paMsbTsTwPQhXNKQ7awQa"
-TABLE_ID = 698482
-BASE_URL = "https://api.baserow.io/api/database/rows/table"
+# ------------------ تنظیمات Baserow ------------------
+BASEROW_API_TOKEN = "توکن_خودت_اینجا_بذار"
+BASE_ID = "appBh5G9yDkiqBAkd"  # بیس تو
+TABLE_ID = "tblVEZtxVsSXgOREF"  # تیبل تو
+BASEROW_URL = f"https://api.baserow.io/api/database/rows/table/{TABLE_ID}/"
 
 HEADERS = {
-    "Authorization": f"Token {BASEROW_TOKEN}",
-    "Content-Type": "application/json",
+    "Authorization": f"Token {BASEROW_API_TOKEN}",
+    "Content-Type": "application/json"
 }
 
-# --- دریافت ردیف‌ها از Baserow ---
-@st.cache_data(show_spinner=False)
-def get_rows():
-    resp = requests.get(f"{BASE_URL}/{TABLE_ID}/?user_field_names=true", headers=HEADERS)
-    resp.raise_for_status()
-    return resp.json()["results"]
-
-# --- آپدیت یک ردیف در Baserow ---
-def update_row(row_id, field_data):
-    url = f"{BASE_URL}/{TABLE_ID}/{row_id}/"
-    resp = requests.patch(url, headers=HEADERS, data=json.dumps(field_data))
-    if resp.status_code != 200:
-        st.error(f"خطا در آپدیت {row_id}: {resp.text}")
-
-# --- دریافت قیمت‌ها از Bonbast ---
+# ------------------ تابع گرفتن قیمت‌ها از Bonbast ------------------
 def fetch_prices():
     url = "https://www.bonbast.com/json"
     try:
-        resp = requests.post(url, data={})
-        resp.raise_for_status()
-        data = resp.json()
+        response = requests.post(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
         prices = {
-            "eur": float(data["EUR"]["Sell"].replace(",", "")),
-            "usd": float(data["USD"]["Sell"].replace(",", "")),
-            "gold18k": float(data["Gold"]["18K"]["Sell"].replace(",", "")),
-            "coinemami": float(data["Coins"]["Emami"]["Sell"].replace(",", "")),
-            "coinhalf": float(data["Coins"]["Half"]["Sell"].replace(",", "")),
-            "coinquarter": float(data["Coins"]["Quarter"]["Sell"].replace(",", "")),
-            "coin1g": float(data["Coins"]["1g"]["Sell"].replace(",", "")),
-            "cash": 0
+            "eur": int(data["eur1"]),
+            "usd": int(data["usd1"]),
+            "gold18k": int(data["gol18"]),
+            "coinemami": int(data["emami1"]),
+            "coinhalf": int(data["azadi1_2"]),
+            "coinquarter": int(data["azadi1_4"]),
+            "coin1g": int(data["azadi1g"]),
         }
         return prices
     except Exception as e:
         st.error(f"خطا در دریافت قیمت‌ها: {e}")
         return {}
 
-# --- آپدیت Price ها در Baserow ---
-def update_prices(prices):
+# ------------------ توابع ارتباط با Baserow ------------------
+def get_rows():
+    r = requests.get(BASEROW_URL, headers=HEADERS)
+    r.raise_for_status()
+    return r.json()["results"]
+
+def update_row(row_id, data):
+    url = f"{BASEROW_URL}{row_id}/"
+    r = requests.patch(url, headers=HEADERS, json=data)
+    r.raise_for_status()
+
+def update_prices_in_baserow(prices):
     rows = get_rows()
     for row in rows:
-        symbol = row["Symbol"]
-        if symbol in prices:
-            update_row(row["id"], {"Price": str(prices[symbol])})
+        name = row["Name"].lower()
+        if name in prices:
+            update_row(row["id"], {"Price": prices[name]})
 
-# --- بخش Streamlit ---
+# ------------------ اجرای اصلی ------------------
 st.set_page_config(page_title="مدیریت دارایی‌ها", layout="wide")
-st.title("مدیریت دارایی‌ها")
 
-# --- بخش 1: قیمت‌های لحظه‌ای ---
-st.subheader("قیمت‌های لحظه‌ای")
+st.title("💰 مدیریت دارایی‌ها")
+
+# === بخش ۱: قیمت‌های لحظه‌ای ===
+st.subheader("📊 قیمت‌های لحظه‌ای")
 prices = fetch_prices()
-update_prices(prices)  # آپدیت Price ها در Baserow
+if prices:
+    update_prices_in_baserow(prices)
 
 rows = get_rows()
-display_rows = [r for r in rows if r["Symbol"] != "cash"]
 
-table_data = []
-for r in display_rows:
-    price = r.get("Price") or 0
-    table_data.append([r["Name"], "{:,.0f}".format(float(price))])
+data_display = []
+for row in rows:
+    if row["Name"].lower() != "naghd":  # موجودی نقدی رو نشون نده
+        data_display.append({
+            "نماد": row["Name"],
+            "قیمت": f"{int(row['Price']):,}".replace(",", ".")
+        })
 
-st.table(table_data)
+st.table(data_display)
 
-# --- بخش 2: ورود دارایی‌ها ---
-with st.expander("ورود دارایی‌ها", expanded=False):
-    for r in rows:
-        name = r["Name"]
-        symbol = r["Symbol"]
-        current = r.get("Assets") or ""
-        value = st.text_input(f"{name}:", current, key=symbol)
-        if value.strip().isdigit():
-            update_row(r["id"], {"Assets": value})
-            # محاسبه Total Assets Prices
-            price = float(r.get("Price") or 0)
-            total = float(value) * price
-            update_row(r["id"], {"Total Assets Prices": str(total)})
+# === بخش ۲: ورود دارایی‌ها ===
+st.subheader("🧮 ورود دارایی‌ها")
+with st.expander("نمایش / ویرایش دارایی‌ها"):
+    for row in rows:
+        asset_val = st.text_input(
+            f"{row['Name']} :", value=str(row.get("Assets", "")), key=row["id"]
+        )
+        if asset_val.strip():
+            try:
+                asset_int = int(asset_val)
+                total_val = asset_int * int(row.get("Price", 0))
+                update_row(row["id"], {
+                    "Assets": asset_int,
+                    "Total Assets Prices": total_val
+                })
+            except ValueError:
+                st.warning(f"مقدار '{asset_val}' برای {row['Name']} معتبر نیست.")
 
-# --- بخش 3: محاسبه دارایی‌ها ---
-st.subheader("محاسبه دارایی‌ها")
-table_assets = []
-total_assets = 0
-for r in rows:
-    name = r["Name"]
-    assets = float(r.get("Assets") or 0)
-    total = float(r.get("Total Assets Prices") or 0)
-    table_assets.append([name, "{:,.0f}".format(assets), "{:,.0f}".format(total)])
-    total_assets += total
+# === بخش ۳: محاسبه دارایی‌ها ===
+st.subheader("📈 محاسبه دارایی‌ها")
+rows = get_rows()
+summary_data = []
+total_sum = 0
+for row in rows:
+    total_val = int(row.get("Total Assets Prices", 0))
+    total_sum += total_val
+    summary_data.append({
+        "نماد": row["Name"],
+        "تعداد": f"{int(row.get('Assets', 0)):,}".replace(",", "."),
+        "مجموع ارزش": f"{total_val:,}".replace(",", ".")
+    })
 
-st.table(table_assets)
-st.write(f"**جمع کل دارایی‌ها:** {total_assets:,.0f}")
+st.table(summary_data)
+st.markdown(f"### 💵 جمع کل دارایی‌ها: {total_sum:,}".replace(",", "."))
+
+st.caption("آخرین به‌روزرسانی قیمت‌ها به صورت خودکار از Bonbast انجام شد ✅")
