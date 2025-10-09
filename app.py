@@ -6,7 +6,7 @@ import time
 st.set_page_config(page_title="مدیریت دارایی", layout="wide")
 
 # --- Baserow ---
-BASEROW_TOKEN = st.secrets["BASEROW"]["TOKEN"]
+BASEROW_TOKEN = "dc2jtvdYze2paMsbTsTwPQhXNKQ7awQa"
 BASE_URL = "https://api.baserow.io/api/database/rows/table/698482/"
 HEADERS = {"Authorization": f"Token {BASEROW_TOKEN}"}
 
