@@ -1,116 +1,123 @@
 import streamlit as st
-import pandas as pd
 import requests
-from datetime import datetime
+from playwright.sync_api import sync_playwright
+import time
 
-# تنظیمات صفحه
-st.set_page_config(page_title="مدیریت دارایی‌ها", layout="wide")
+st.set_page_config(page_title="مدیریت دارایی", layout="wide")
 
-API_URL = "https://brsapi.ir/Api/Market/Gold_Currency.php?key=BfDYYWKtijTbhNUkYARjPhvkME9q2xyw"
+# --- Baserow ---
+BASEROW_TOKEN = st.secrets["BASEROW"]["TOKEN"]
+BASE_URL = "https://api.baserow.io/api/database/rows/table/698482/"
+HEADERS = {"Authorization": f"Token {BASEROW_TOKEN}"}
 
-# ---------------------------------------------------------------------
-# دریافت داده از API
-# ---------------------------------------------------------------------
-def fetch_api_data():
+PRICE_FIELD = "field_5832628"
+ASSETS_FIELD = "field_5832629"
+TOTAL_FIELD = "field_5832630"
+
+# --- Bonbast XPaths ---
+XPATHS = {
+    "eur": "/html/body/div[2]/div[2]/div[1]/div[2]/div[1]/table/tbody/tr[3]/td[3]",
+    "usd": "/html/body/div[2]/div[2]/div[1]/div[2]/div[1]/table/tbody/tr[2]/td[3]",
+    "gold18k": "/html/body/div[2]/div[2]/div[1]/div[4]/div[1]/div/div/span",
+    "coinemami": "/html/body/div[2]/div[2]/div[1]/div[3]/div[2]/table/tbody/tr[3]/td[2]",
+    "coinhalf": "/html/body/div[2]/div[2]/div[1]/div[3]/div[2]/table/tbody/tr[4]/td[2]",
+    "coinquarter": "/html/body/div[2]/div[2]/div[1]/div[3]/div[2]/table/tbody/tr[5]/td[2]",
+    "coin1g": "/html/body/div[2]/div[2]/div[1]/div[3]/div[2]/table/tbody/tr[6]/td[2]",
+}
+
+# --- تابع فرمت هزارگان ---
+def format_thousands(num):
     try:
-        response = requests.get(API_URL, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        return data
-    except requests.exceptions.RequestException as e:
-        st.error(f"خطا در دریافت اطلاعات از API: {e}")
-        return None
+        return "{:,}".format(int(num)).replace(",", ".")
+    except:
+        return num
 
-# ---------------------------------------------------------------------
-# تبدیل داده‌ها به DataFrame
-# ---------------------------------------------------------------------
-def parse_data(data):
-    if not data:
-        return pd.DataFrame()
+# --- گرفتن Priceها از Bonbast ---
+def fetch_prices():
+    prices = {}
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto("https://www.bonbast.com/")
+        time.sleep(2)
+        for symbol, xpath in XPATHS.items():
+            try:
+                el = page.locator(f"xpath={xpath}")
+                prices[symbol] = el.inner_text().strip().replace(",", "")
+            except:
+                prices[symbol] = None
+        browser.close()
+    prices["cash"] = "0"
+    return prices
 
-    all_items = []
+# --- آپدیت Priceها در Baserow ---
+def update_prices(prices):
+    resp = requests.get(BASE_URL + "?user_field_names=true", headers=HEADERS)
+    rows = resp.json().get("results", [])
+    for row in rows:
+        symbol = row.get("Symbol")
+        row_id = row.get("id")
+        if row_id and symbol in prices:
+            data = {PRICE_FIELD: prices[symbol]}
+            requests.patch(BASE_URL + f"{row_id}/", headers=HEADERS, json=data)
 
-    # بخش ارزها
-    for item in data.get("currency", []):
-        all_items.append({
-            "نوع": "ارز",
-            "نام": item["name"],
-            "نماد": item["symbol"],
-            "قیمت": float(item["price"]),
-            "واحد": item["unit"]
-        })
+# --- گرفتن ردیف‌ها ---
+def get_rows():
+    resp = requests.get(BASE_URL + "?user_field_names=true", headers=HEADERS)
+    return resp.json().get("results", [])
 
-    # بخش طلا و سکه
-    for item in data.get("gold", []):
-        all_items.append({
-            "نوع": "طلا/سکه",
-            "نام": item["name"],
-            "نماد": item["symbol"],
-            "قیمت": float(item["price"]),
-            "واحد": item["unit"]
-        })
+# --- آپدیت Assets و Total ---
+def update_assets(symbol, value):
+    rows = get_rows()
+    for row in rows:
+        if row["Symbol"] == symbol:
+            price = row.get("Price", "0").replace(".", "")
+            try:
+                total = int(price) * int(value)
+            except:
+                total = 0
+            data = {ASSETS_FIELD: str(value), TOTAL_FIELD: str(total)}
+            requests.patch(BASE_URL + f"{row['id']}/", headers=HEADERS, json=data)
+            break
 
-    df = pd.DataFrame(all_items)
+# --- اجرای اولیه ---
+prices = fetch_prices()
+update_prices(prices)
+rows = get_rows()
 
-    # فقط نمادهای مورد نیاز
-    target_symbols = [
-        "USD", "EUR", "IR_GOLD_18K", "IR_GOLD_24K", "IR_GOLD_MELTED",
-        "IR_COIN_EMAMI", "IR_COIN_HALF", "IR_COIN_QUARTER", "IR_COIN_1G"
-    ]
+# --- بخش 1: قیمت های لحظه ای ---
+st.header("💰 قیمت‌های لحظه‌ای")
+price_table = []
+for row in rows:
+    if row["Symbol"] == "cash":
+        continue
+    price_table.append({
+        "نام نماد": row["Name"],
+        "قیمت": format_thousands(row.get("Price", "0"))
+    })
+st.table(price_table)
 
-    df = df[df["نماد"].isin(target_symbols)]
+# --- بخش 2: ورود دارایی ها ---
+with st.expander("📥 ورود دارایی‌ها", expanded=False):
+    for row in rows:
+        name = row["Name"]
+        symbol = row["Symbol"]
+        value = st.text_input(f"{name}:", row.get("Assets", ""), key=f"asset_{symbol}")
+        if value.isdigit():
+            update_assets(symbol, value)
 
-    df["order"] = df["نماد"].apply(lambda s: target_symbols.index(s))
-    df = df.sort_values("order").drop(columns=["order"]).reset_index(drop=True)
-
-    return df
-
-# ---------------------------------------------------------------------
-# رابط کاربری
-# ---------------------------------------------------------------------
-st.title("💰 مدیریت و نمایش دارایی‌ها")
-
-# دریافت داده از API
-api_data = fetch_api_data()
-
-if api_data:
-    df = parse_data(api_data)
-
-    if not df.empty:
-        st.subheader("📊 نرخ لحظه‌ای ارز و طلا")
-        st.dataframe(df[["نام", "نماد", "قیمت", "واحد"]], use_container_width=True)
-
-        st.markdown("---")
-
-        # ---------------------------------------------------------------------
-        # ورود مقدار دارایی‌ها توسط کاربر (فقط برای دارایی‌های واقعی)
-        # ---------------------------------------------------------------------
-        st.subheader("🧮 وارد کردن مقادیر دارایی‌ها")
-
-        asset_values = {}
-        total_value = 0
-
-        for _, row in df.iterrows():
-            amount = st.number_input(
-                f"{row['نام']} ({row['نماد']}) — قیمت فعلی: {row['قیمت']:,} {row['واحد']}",
-                min_value=0.0,
-                value=0.0,
-                step=1.0,
-                key=row["نماد"]
-            )
-            asset_values[row["نماد"]] = amount * row["قیمت"]
-            total_value += asset_values[row["نماد"]]
-
-        # ---------------------------------------------------------------------
-        # نمایش مجموع نهایی
-        # ---------------------------------------------------------------------
-        st.markdown("---")
-        st.subheader("📈 ارزش کل دارایی‌ها")
-        st.success(f"💰 مجموع دارایی‌ها: {total_value:,.0f} تومان")
-
-        st.caption(f"آخرین بروزرسانی از API: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    else:
-        st.warning("هیچ داده‌ای برای نمایش وجود ندارد.")
-else:
-    st.error("اتصال به API برقرار نشد.")
-
+# --- بخش 3: محاسبه دارایی ها ---
+st.header("📊 محاسبه دارایی‌ها")
+calc_table = []
+total_sum = 0
+for row in rows:
+    assets = int(row.get("Assets", "0") or 0)
+    total = int(row.get("Total Assets Prices", "0") or 0)
+    calc_table.append({
+        "نام نماد": row["Name"],
+        "تعداد دارایی": assets,
+        "مجموع دارایی": format_thousands(total)
+    })
+    total_sum += total
+st.table(calc_table)
+st.markdown(f"**جمع کل دارایی‌ها: {format_thousands(total_sum)}**")
